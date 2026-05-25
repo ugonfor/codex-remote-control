@@ -874,10 +874,9 @@ export function App() {
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={(event) => {
-                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                      event.preventDefault();
-                      submitPrompt();
-                    }
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    submitPrompt();
                   }}
                   placeholder="명령어를 입력하려면 / 입력"
                   rows={1}
