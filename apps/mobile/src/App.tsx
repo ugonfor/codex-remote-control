@@ -29,14 +29,7 @@ import type {
   PairingClaimResponse,
   RelayToMobileMessage
 } from "@codex-remote-control/shared";
-
-type EventEntry = {
-  id: string;
-  at: string;
-  kind: "info" | "success" | "warning" | "error";
-  title: string;
-  detail?: unknown;
-};
+import { displayActionForNotification, readableMethod, type EventDraft, type EventEntry } from "./codexEvents";
 
 type PendingServerRequest = {
   id: string | number;
@@ -88,7 +81,7 @@ export function App() {
 
   const activeHost = hosts.find((host) => host.id === activeHostId) ?? hosts[0];
 
-  const addEvent = useCallback((entry: Omit<EventEntry, "id" | "at">) => {
+  const addEvent = useCallback((entry: EventDraft) => {
     setEvents((current) => [
       {
         id: createId(),
@@ -97,6 +90,53 @@ export function App() {
       },
       ...current
     ].slice(0, 80));
+  }, []);
+
+  const upsertEvent = useCallback((id: string, entry: EventDraft) => {
+    setEvents((current) => {
+      const existing = current.find((item) => item.id === id);
+      if (existing) {
+        return current.map((item) => item.id === id ? { ...item, ...entry } : item);
+      }
+
+      return [
+        {
+          id,
+          at: new Date().toLocaleTimeString(),
+          ...entry
+        },
+        ...current
+      ].slice(0, 80);
+    });
+  }, []);
+
+  const appendEventBody = useCallback((id: string, entry: EventDraft, body: string) => {
+    setEvents((current) => {
+      const existing = current.find((item) => item.id === id);
+      if (existing) {
+        return current.map((item) => item.id === id
+          ? {
+              ...item,
+              ...entry,
+              body: `${item.body ?? ""}${body}`
+            }
+          : item);
+      }
+
+      return [
+        {
+          id,
+          at: new Date().toLocaleTimeString(),
+          ...entry,
+          body
+        },
+        ...current
+      ].slice(0, 80);
+    });
+  }, []);
+
+  const removeEvent = useCallback((id: string) => {
+    setEvents((current) => current.filter((event) => event.id !== id));
   }, []);
 
   const send = useCallback((message: unknown) => {
@@ -244,24 +284,25 @@ export function App() {
             params: message.params
           }
         ]);
-        addEvent({
-          kind: "warning",
-          title: readableMethod(message.method),
-          detail: message.params
-        });
         break;
-      case "codex.serverNotification":
-        addEvent({
-          kind: eventKind(message.method),
-          title: readableMethod(message.method),
-          detail: message.params
-        });
+      case "codex.serverNotification": {
+        const action = displayActionForNotification(message.method, message.params);
+        if (action.type === "add") {
+          addEvent(action.event);
+        } else if (action.type === "append") {
+          appendEventBody(action.id, action.event, action.body);
+        } else if (action.type === "remove") {
+          removeEvent(action.id);
+        } else if (action.type === "upsert") {
+          upsertEvent(action.id, action.event);
+        }
         break;
+      }
       case "relay.error":
         addEvent({ kind: "error", title: message.message });
         break;
     }
-  }, [addEvent]);
+  }, [addEvent, appendEventBody, removeEvent, upsertEvent]);
 
   const pairDevice = useCallback(async () => {
     const code = pairingCode.replace(/\D/g, "");
@@ -416,7 +457,7 @@ export function App() {
         input: [{ type: "text", text }]
       });
       setPrompt("");
-      addEvent({ kind: "info", title: "Turn started", detail: { text } });
+      addEvent({ kind: "info", title: "Prompt", role: "user", body: text });
     };
 
     if (threadId) {
@@ -818,24 +859,25 @@ export function App() {
                   ) : null}
 
                   {orderedEvents.map((event) => {
-                    const userText = readUserPrompt(event.detail);
-                    const isUser = event.title === "Turn started" && userText;
+                    const isUser = event.role === "user";
+                    const speaker = isUser ? "You" : event.kind === "warning" ? "Approval" : "Codex";
 
                     return (
                       <article className={`message-row ${isUser ? "user" : "assistant"} ${event.kind}`} key={event.id}>
                         <div className="message-meta">
-                          <span>{isUser ? "You" : event.kind === "warning" ? "Approval" : "Codex"}</span>
+                          <span>{speaker}</span>
                           <time>{event.at}</time>
                         </div>
                         <div className="message-bubble">
-                          {isUser ? (
-                            <p>{userText}</p>
-                          ) : (
-                            <>
-                              <strong>{event.title}</strong>
-                              {event.detail ? <pre>{formatJson(event.detail)}</pre> : null}
-                            </>
-                          )}
+                          {isUser || event.title === "Response" ? null : <strong>{event.title}</strong>}
+                          {event.body ? <p>{event.body}</p> : null}
+                          {!event.body && event.title === "Response" ? <p>Codex is responding...</p> : null}
+                          {event.detail ? (
+                            <details className="message-details">
+                              <summary>Details</summary>
+                              <pre>{formatJson(event.detail)}</pre>
+                            </details>
+                          ) : null}
                         </div>
                       </article>
                     );
@@ -1169,15 +1211,6 @@ function formatDateTime(value: string): string {
   return date.toLocaleString();
 }
 
-function readUserPrompt(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const text = (value as { text?: unknown }).text;
-  return typeof text === "string" ? text : undefined;
-}
-
 function toWsUrl(baseUrl: string, path: string, token: string): string {
   const url = new URL(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -1228,28 +1261,6 @@ function readThreadId(value: JsonValue | undefined): string | undefined {
     return thread.id;
   }
   return typeof value.id === "string" ? value.id : undefined;
-}
-
-function readableMethod(method: string): string {
-  return method
-    .replace(/^item\//, "")
-    .replace(/^turn\//, "turn ")
-    .replace(/^thread\//, "thread ")
-    .replace(/\/requestApproval$/, " approval")
-    .replace(/\//g, " ");
-}
-
-function eventKind(method: string): EventEntry["kind"] {
-  if (method.includes("requestApproval")) {
-    return "warning";
-  }
-  if (method.includes("completed")) {
-    return "success";
-  }
-  if (method.includes("failed") || method.includes("error")) {
-    return "error";
-  }
-  return "info";
 }
 
 function createId(): string {

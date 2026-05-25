@@ -469,6 +469,10 @@ button {
   white-space: pre-wrap;
 }
 
+.message-bubble strong + p {
+  margin-top: 4px;
+}
+
 .message-bubble strong {
   display: block;
   margin-bottom: 5px;
@@ -493,6 +497,23 @@ button {
   border-radius: 8px;
   color: var(--code-text);
   background: var(--bg-code);
+}
+
+.message-details {
+  margin-top: 8px;
+}
+
+.message-details summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  font-weight: 720;
+  cursor: pointer;
 }
 
 .message-row.warning .message-bubble {
