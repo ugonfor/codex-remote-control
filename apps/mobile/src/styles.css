@@ -543,6 +543,25 @@ button {
   cursor: pointer;
 }
 
+.link-action {
+  min-height: 34px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.link-action:hover {
+  color: var(--accent-strong);
+}
+
 .approval-actions button,
 .secondary-action {
   color: var(--text-soft);
@@ -664,7 +683,8 @@ button {
 }
 
 .pairing-panel {
-  width: min(100%, 420px);
+  width: 100%;
+  max-width: 420px;
   padding: 22px;
 }
 

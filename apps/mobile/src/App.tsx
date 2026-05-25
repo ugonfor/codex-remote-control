@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   CircleStop,
+  KeyRound,
   Link2,
   MoreHorizontal,
   PlugZap,
@@ -19,6 +20,7 @@ import {
   X
 } from "lucide-react";
 import type {
+  AuthLoginResponse,
   HostSummary,
   JsonRpcResponse,
   JsonValue,
@@ -55,7 +57,7 @@ export function App() {
   const isHelpPage = window.location.pathname === "/help";
   const hasPairingCode = Boolean(query.get("code"));
   const [relayUrl, setRelayUrl] = useState(
-    query.get("relay") ?? localStorage.getItem(relayUrlKey) ?? localStorage.getItem(legacyRelayUrlKey) ?? "http://localhost:8787"
+    query.get("relay") ?? localStorage.getItem(relayUrlKey) ?? localStorage.getItem(legacyRelayUrlKey) ?? defaultRelayUrl()
   );
   const [pairingCode, setPairingCode] = useState(query.get("code") ?? "");
   const [deviceToken, setDeviceToken] = useState(hasPairingCode ? "" : localStorage.getItem(deviceTokenKey) ?? localStorage.getItem(legacyDeviceTokenKey) ?? "");
@@ -64,6 +66,10 @@ export function App() {
   const [activeHostId, setActiveHostId] = useState(localStorage.getItem(activeHostIdKey) ?? localStorage.getItem(legacyActiveHostIdKey) ?? "");
   const [socketState, setSocketState] = useState<"closed" | "connecting" | "open">("closed");
   const [pushState, setPushState] = useState<"idle" | "enabled" | "blocked" | "unsupported">("idle");
+  const [authView, setAuthView] = useState<"login" | "pair">(hasPairingCode ? "pair" : "login");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginState, setLoginState] = useState<"idle" | "loggingIn" | "failed">("idle");
+  const [loginMessage, setLoginMessage] = useState("");
   const [pairingState, setPairingState] = useState<"idle" | "pairing" | "paired" | "failed">("idle");
   const [pairingMessage, setPairingMessage] = useState("");
   const [events, setEvents] = useState<EventEntry[]>([]);
@@ -152,7 +158,7 @@ export function App() {
         setHosts([]);
         setActiveHostId("");
         setPairingState("failed");
-        setPairingMessage("Saved device session expired. Pair again.");
+        setPairingMessage("Saved device session expired. Sign in again.");
       }
     });
 
@@ -302,6 +308,61 @@ export function App() {
     }
   }, [addEvent, pairingCode, relayUrl]);
 
+  const login = useCallback(async () => {
+    if (!loginPassword) {
+      setLoginState("failed");
+      setLoginMessage("Password is required.");
+      return;
+    }
+
+    setLoginState("loggingIn");
+    setLoginMessage("Signing in...");
+
+    try {
+      const response = await fetch(`${trimRight(relayUrl, "/")}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          password: loginPassword,
+          deviceName: defaultDeviceName()
+        })
+      });
+
+      if (!response.ok) {
+        const message = response.status === 503
+          ? "Login is not enabled on this relay. Set CODEX_REMOTE_LOGIN_PASSWORD."
+          : response.status === 401
+            ? "Password is incorrect."
+            : `Login failed: ${response.status}`;
+        setLoginState("failed");
+        setLoginMessage(message);
+        addEvent({ kind: "error", title: message });
+        return;
+      }
+
+      const result = (await response.json()) as AuthLoginResponse;
+      setDeviceToken(result.deviceToken);
+      setDeviceId(result.deviceId);
+      setHosts(result.hosts);
+      const nextHostId = result.hosts[0]?.id ?? "";
+      setActiveHostId(nextHostId);
+      setLoginPassword("");
+      setLoginState("idle");
+      setLoginMessage("");
+      localStorage.setItem(deviceTokenKey, result.deviceToken);
+      localStorage.setItem(deviceIdKey, result.deviceId);
+      if (nextHostId) {
+        localStorage.setItem(activeHostIdKey, nextHostId);
+      }
+      addEvent({ kind: "success", title: "Signed in" });
+    } catch {
+      const message = "Cannot reach relay. Check that the phone is on the same network.";
+      setLoginState("failed");
+      setLoginMessage(message);
+      addEvent({ kind: "error", title: message });
+    }
+  }, [addEvent, loginPassword, relayUrl]);
+
   useEffect(() => {
     if (!hasPairingCode || deviceToken || pairingState !== "idle" || autoPairAttemptedRef.current) {
       return;
@@ -399,6 +460,14 @@ export function App() {
   }, [addEvent]);
 
   const logout = useCallback(() => {
+    if (deviceToken) {
+      void fetch(`${trimRight(relayUrl, "/")}/api/auth/logout`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${deviceToken}`
+        }
+      }).catch(() => undefined);
+    }
     localStorage.removeItem(deviceTokenKey);
     localStorage.removeItem(deviceIdKey);
     localStorage.removeItem(activeHostIdKey);
@@ -408,7 +477,7 @@ export function App() {
     setActiveHostId("");
     setThreadId("");
     wsRef.current?.close();
-  }, []);
+  }, [deviceToken, relayUrl]);
 
   const enablePush = useCallback(async () => {
     const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
@@ -489,27 +558,59 @@ export function App() {
           <section className="pairing-layout">
             <div className="panel pairing-panel">
               <div className="panel-title">
-                <Smartphone size={20} />
-                <h1>Pair Device</h1>
+                {authView === "login" ? <KeyRound size={20} /> : <Smartphone size={20} />}
+                <h1>{authView === "login" ? "Sign In" : "Pair Device"}</h1>
               </div>
               <label>
                 Relay
                 <input value={relayUrl} onChange={(event) => setRelayUrl(event.target.value)} />
               </label>
-              <label>
-                Pairing code
-                <input
-                  value={pairingCode}
-                  onChange={(event) => setPairingCode(event.target.value)}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                />
-              </label>
-              <button className="primary-action" onClick={pairDevice}>
-                <Link2 size={18} />
-                {pairingState === "pairing" ? "Pairing..." : "Pair"}
-              </button>
-              {pairingMessage ? <p className={`pairing-message ${pairingState}`}>{pairingMessage}</p> : null}
+              {authView === "login" ? (
+                <>
+                  <label>
+                    Password
+                    <input
+                      value={loginPassword}
+                      onChange={(event) => setLoginPassword(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void login();
+                        }
+                      }}
+                      type="password"
+                      autoComplete="current-password"
+                    />
+                  </label>
+                  <button className="primary-action" onClick={login}>
+                    <KeyRound size={18} />
+                    {loginState === "loggingIn" ? "Signing in..." : "Sign In"}
+                  </button>
+                  {loginMessage ? <p className={`pairing-message ${loginState === "failed" ? "failed" : ""}`}>{loginMessage}</p> : null}
+                  <button className="link-action" onClick={() => setAuthView("pair")}>
+                    Use pairing code instead
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Pairing code
+                    <input
+                      value={pairingCode}
+                      onChange={(event) => setPairingCode(event.target.value)}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                    />
+                  </label>
+                  <button className="primary-action" onClick={pairDevice}>
+                    <Link2 size={18} />
+                    {pairingState === "pairing" ? "Pairing..." : "Pair"}
+                  </button>
+                  {pairingMessage ? <p className={`pairing-message ${pairingState}`}>{pairingMessage}</p> : null}
+                  <button className="link-action" onClick={() => setAuthView("login")}>
+                    Sign in with password
+                  </button>
+                </>
+              )}
             </div>
           </section>
         </>
@@ -575,7 +676,7 @@ export function App() {
             <div className="sidebar-footer">
               <span className="user-mark">HR</span>
               <span>{shortId(deviceId)}</span>
-              <button onClick={logout} aria-label="Disconnect device" title="Disconnect device">
+              <button onClick={logout} aria-label="Log out" title="Log out">
                 <PlugZap size={15} />
               </button>
             </div>
@@ -738,11 +839,12 @@ Relay:  ${relayUrl}`}</pre>
         </article>
 
         <article className="help-panel">
-          <h2>2. 핸드폰 pairing</h2>
-          <p>host agent 터미널의 QR을 스캔하거나 pairing URL을 엽니다.</p>
+          <h2>2. 핸드폰 로그인</h2>
+          <p>relay에 `CODEX_REMOTE_LOGIN_PASSWORD`가 설정돼 있으면 폰에서 비밀번호로 로그인합니다.</p>
+          <pre>{`CODEX_REMOTE_LOGIN_PASSWORD=your-password`}</pre>
+          <p>pairing은 fallback입니다. 새 code가 필요하면 Mac에서 아래 명령을 실행합니다.</p>
+          <pre>{`node apps/host-agent/dist/index.js --relay ${relayUrl} pair`}</pre>
           <pre>{pairingUrl}</pre>
-          <p>pairing code는 한 번 쓰면 소모됩니다. 새 code가 필요하면 Mac에서 아래 명령을 실행합니다.</p>
-          <pre>{`node apps/host-agent/dist/index.js pair --relay ${relayUrl}`}</pre>
         </article>
 
         <article className="help-panel">
@@ -773,6 +875,7 @@ Relay:  ${relayUrl}`}</pre>
             <li>아무것도 안 보이면 폰과 Mac이 같은 Wi-Fi인지 확인합니다.</li>
             <li>404는 pairing code가 틀렸거나 이미 사용된 상태입니다. 위 pairing 명령으로 새 code를 발급합니다.</li>
             <li>Relay socket is closed가 나오면 relay 또는 host agent를 다시 띄웁니다.</li>
+            <li>로그인이 안 되면 relay가 `CODEX_REMOTE_LOGIN_PASSWORD`와 함께 실행 중인지 확인합니다.</li>
             <li>Host가 offline이면 Mac이 잠들었거나 host agent가 종료된 상태입니다.</li>
           </ul>
         </article>
@@ -819,6 +922,14 @@ function toWsUrl(baseUrl: string, path: string, token: string): string {
   url.search = "";
   url.searchParams.set("token", token);
   return url.toString();
+}
+
+function defaultRelayUrl(): string {
+  const port = "8787";
+  if (window.location.hostname && window.location.hostname !== "localhost") {
+    return `${window.location.protocol}//${window.location.hostname}:${port}`;
+  }
+  return `http://localhost:${port}`;
 }
 
 function defaultDeviceName(): string {

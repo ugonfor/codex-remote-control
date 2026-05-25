@@ -7,6 +7,8 @@ import type {
   HostRuntimeStatus,
   HostSummary,
   HostToRelayMessage,
+  AuthLoginRequest,
+  AuthLoginResponse,
   MobileToRelayMessage,
   PairingClaimRequest,
   PairingCodeResponse,
@@ -19,6 +21,7 @@ const port = Number(process.env.PORT ?? 8787);
 const publicRelayUrl = process.env.PUBLIC_RELAY_URL ?? `http://localhost:${port}`;
 const mobileAppUrl = process.env.MOBILE_APP_URL ?? "http://localhost:5173";
 const pairingTtlMs = Number(process.env.PAIRING_TTL_MS ?? 10 * 60 * 1000);
+const loginPassword = process.env.CODEX_REMOTE_LOGIN_PASSWORD ?? process.env.LOGIN_PASSWORD ?? "";
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 const vapidSubject = process.env.VAPID_SUBJECT ?? "mailto:admin@example.com";
@@ -53,6 +56,7 @@ type DeviceRecord = {
   token: string;
   name: string;
   hostIds: Set<string>;
+  allHosts: boolean;
   createdAt: Date;
   lastSeenAt: Date;
 };
@@ -117,6 +121,37 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   const url = parseRequestUrl(req);
 
   if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    if (!loginPassword) {
+      sendJson(res, 503, { error: "login_disabled" });
+      return;
+    }
+
+    const body = await readJson<AuthLoginRequest>(req);
+    if (typeof body.password !== "string" || body.password !== loginPassword) {
+      sendJson(res, 401, { error: "invalid_password" });
+      return;
+    }
+
+    const device = createDevice(normalizeDeviceName(body.deviceName), { allHosts: true });
+    const response: AuthLoginResponse = {
+      deviceId: device.id,
+      deviceToken: device.token,
+      hosts: listDeviceHosts(device)
+    };
+    sendJson(res, 200, response);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    const device = authenticateDevice(req);
+    if (device) {
+      deleteDevice(device);
+    }
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -190,26 +225,18 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
       return;
     }
 
-    const deviceId = `dev_${randomToken(12)}`;
-    const deviceToken = `dev_${randomToken(32)}`;
-    const device: DeviceRecord = {
-      id: deviceId,
-      token: deviceToken,
-      name: normalizeDeviceName(body.deviceName),
-      hostIds: new Set([host.id]),
-      createdAt: new Date(),
-      lastSeenAt: new Date()
-    };
+    const device = createDevice(normalizeDeviceName(body.deviceName), {
+      hostIds: [host.id],
+      allHosts: false
+    });
 
     host.pairedDeviceIds.add(device.id);
     host.pairedAt = host.pairedAt ?? new Date();
-    devices.set(device.id, device);
-    deviceTokens.set(device.token, device.id);
     pairings.delete(code);
 
     const response = {
-      deviceId,
-      deviceToken,
+      deviceId: device.id,
+      deviceToken: device.token,
       host: toHostSummary(host)
     };
 
@@ -226,10 +253,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     }
 
     sendJson(res, 200, {
-      hosts: Array.from(device.hostIds)
-        .map((hostId) => hosts.get(hostId))
-        .filter((host): host is HostRecord => Boolean(host))
-        .map(toHostSummary)
+      hosts: listDeviceHosts(device)
     });
     return;
   }
@@ -495,7 +519,7 @@ function broadcastHost(hostId: string): void {
 
 function broadcastToPairedMobiles(hostId: string, message: RelayToMobileMessage): void {
   for (const connection of mobileConnections.values()) {
-    if (!connection.device.hostIds.has(hostId)) {
+    if (!canAccessHost(connection.device, hostId)) {
       continue;
     }
     if (connection.ws.readyState === WebSocket.OPEN) {
@@ -505,17 +529,22 @@ function broadcastToPairedMobiles(hostId: string, message: RelayToMobileMessage)
 }
 
 function listDeviceHosts(device: DeviceRecord): HostSummary[] {
-  return Array.from(device.hostIds)
+  const hostIds = device.allHosts ? Array.from(hosts.keys()) : Array.from(device.hostIds);
+  return hostIds
     .map((hostId) => hosts.get(hostId))
     .filter((host): host is HostRecord => Boolean(host))
     .map(toHostSummary);
 }
 
 function getAuthorizedHost(device: DeviceRecord, hostId: string): HostRecord | undefined {
-  if (!device.hostIds.has(hostId)) {
+  if (!canAccessHost(device, hostId)) {
     return undefined;
   }
   return hosts.get(hostId);
+}
+
+function canAccessHost(device: DeviceRecord, hostId: string): boolean {
+  return device.allHosts || device.hostIds.has(hostId);
 }
 
 function toHostSummary(host: HostRecord): HostSummary {
@@ -528,6 +557,36 @@ function toHostSummary(host: HostRecord): HostSummary {
     agentVersion: host.agentVersion,
     status: host.status
   };
+}
+
+function createDevice(name: string, options: { hostIds?: string[]; allHosts: boolean }): DeviceRecord {
+  const device: DeviceRecord = {
+    id: `dev_${randomToken(12)}`,
+    token: `dev_${randomToken(32)}`,
+    name,
+    hostIds: new Set(options.hostIds ?? []),
+    allHosts: options.allHosts,
+    createdAt: new Date(),
+    lastSeenAt: new Date()
+  };
+  devices.set(device.id, device);
+  deviceTokens.set(device.token, device.id);
+  return device;
+}
+
+function deleteDevice(device: DeviceRecord): void {
+  devices.delete(device.id);
+  deviceTokens.delete(device.token);
+  pushSubscriptions.delete(device.id);
+  for (const host of hosts.values()) {
+    host.pairedDeviceIds.delete(device.id);
+  }
+  for (const [connectionId, connection] of mobileConnections.entries()) {
+    if (connection.device.id === device.id) {
+      connection.ws.close(1008, "logged out");
+      mobileConnections.delete(connectionId);
+    }
+  }
 }
 
 function authenticateDevice(req: IncomingMessage): DeviceRecord | undefined {
@@ -652,7 +711,14 @@ async function sendPushToHostDevices(
     return;
   }
 
-  await Promise.all(Array.from(host.pairedDeviceIds).map(async (deviceId) => {
+  const targetDeviceIds = new Set(host.pairedDeviceIds);
+  for (const device of devices.values()) {
+    if (device.allHosts) {
+      targetDeviceIds.add(device.id);
+    }
+  }
+
+  await Promise.all(Array.from(targetDeviceIds).map(async (deviceId) => {
     const subscriptions = pushSubscriptions.get(deviceId) ?? [];
     const nextSubscriptions: PushSubscription[] = [];
 

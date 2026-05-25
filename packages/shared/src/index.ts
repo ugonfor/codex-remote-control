@@ -73,6 +73,17 @@ export type PairingClaimResponse = {
   host: HostSummary;
 };
 
+export type AuthLoginRequest = {
+  password: string;
+  deviceName: string;
+};
+
+export type AuthLoginResponse = {
+  deviceId: string;
+  deviceToken: string;
+  hosts: HostSummary[];
+};
+
 export type HostToRelayMessage =
   | {
       type: "host.hello";
