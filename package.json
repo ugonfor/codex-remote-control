@@ -1,0 +1,21 @@
+{
+  "name": "codex-remote-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @codex-remote-control/shared && npm run build -w @codex-remote-control/relay && npm run build -w @codex-remote-control/host-agent && npm run build -w @codex-remote-control/mobile",
+    "typecheck": "npm run build -w @codex-remote-control/shared && npm run typecheck -w @codex-remote-control/relay && npm run typecheck -w @codex-remote-control/host-agent && npm run typecheck -w @codex-remote-control/mobile",
+    "dev:relay": "npm run dev -w @codex-remote-control/relay",
+    "dev:host": "npm run dev -w @codex-remote-control/host-agent",
+    "dev:mobile": "npm run dev -w @codex-remote-control/mobile"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
