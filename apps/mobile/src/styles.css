@@ -213,6 +213,11 @@ button {
   background: var(--bg-hover);
 }
 
+.sidebar-nav button.active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .recents-head {
   justify-content: space-between;
   padding: 4px 8px 8px;
@@ -520,6 +525,181 @@ button {
   border-radius: 8px;
   color: var(--code-text);
   background: var(--bg-code);
+}
+
+.management-page {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 34px 28px 80px;
+}
+
+.management-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.management-title h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.management-title p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.management-title button,
+.management-actions button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-radius: 7px;
+  color: var(--text-soft);
+  background: var(--bg-hover);
+  font-size: 13px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.management-title button:hover,
+.management-actions button:hover {
+  background: var(--bg-subtle);
+}
+
+.management-title button:disabled,
+.management-actions button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.management-error {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 13px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.stats-grid article,
+.management-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.stats-grid article {
+  padding: 13px;
+}
+
+.stats-grid strong {
+  display: block;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.stats-grid span {
+  display: block;
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.management-section {
+  margin-top: 22px;
+}
+
+.management-section h2 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.management-list {
+  display: grid;
+  gap: 10px;
+}
+
+.management-card {
+  padding: 13px;
+}
+
+.management-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.management-card-head strong,
+.management-card-head span {
+  display: block;
+}
+
+.management-card-head strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.management-card-head div > span {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.management-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.management-card dt {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.management-card dd {
+  margin: 3px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-card p {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .approval-actions {
@@ -898,6 +1078,18 @@ input:focus {
     padding: 28px 14px 130px;
   }
 
+  .management-page {
+    padding: 24px 14px 120px;
+  }
+
+  .management-title {
+    display: grid;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .composer-dock {
     position: sticky;
     bottom: 0;
@@ -945,6 +1137,15 @@ input:focus {
   }
 
   .approval-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .management-card dl {
+    grid-template-columns: 1fr;
+  }
+
+  .management-actions {
     display: grid;
     grid-template-columns: 1fr;
   }

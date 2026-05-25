@@ -17,9 +17,11 @@ import {
   ShieldCheck,
   Smartphone,
   TerminalSquare,
+  Trash2,
   X
 } from "lucide-react";
 import type {
+  AdminSessionsResponse,
   AuthLoginResponse,
   HostSummary,
   JsonRpcResponse,
@@ -72,6 +74,10 @@ export function App() {
   const [loginMessage, setLoginMessage] = useState("");
   const [pairingState, setPairingState] = useState<"idle" | "pairing" | "paired" | "failed">("idle");
   const [pairingMessage, setPairingMessage] = useState("");
+  const [activeView, setActiveView] = useState<"session" | "manage">("session");
+  const [adminSessions, setAdminSessions] = useState<AdminSessionsResponse | undefined>();
+  const [adminState, setAdminState] = useState<"idle" | "loading" | "failed">("idle");
+  const [adminMessage, setAdminMessage] = useState("");
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingServerRequest[]>([]);
   const [threadId, setThreadId] = useState("");
@@ -519,6 +525,66 @@ export function App() {
     addEvent({ kind: "success", title: "Notifications enabled" });
   }, [addEvent, deviceToken, relayUrl]);
 
+  const loadAdminSessions = useCallback(async () => {
+    if (!deviceToken) {
+      return;
+    }
+
+    setAdminState("loading");
+    setAdminMessage("");
+    try {
+      const response = await fetch(`${trimRight(relayUrl, "/")}/api/admin/sessions`, {
+        headers: {
+          authorization: `Bearer ${deviceToken}`
+        }
+      });
+      if (!response.ok) {
+        const message = response.status === 403
+          ? "Management requires password login."
+          : `Management load failed: ${response.status}`;
+        setAdminState("failed");
+        setAdminMessage(message);
+        addEvent({ kind: "error", title: message });
+        return;
+      }
+      setAdminSessions((await response.json()) as AdminSessionsResponse);
+      setAdminState("idle");
+    } catch {
+      const message = "Cannot reach relay management API.";
+      setAdminState("failed");
+      setAdminMessage(message);
+      addEvent({ kind: "error", title: message });
+    }
+  }, [addEvent, deviceToken, relayUrl]);
+
+  const runAdminAction = useCallback(async (path: string, title: string) => {
+    if (!deviceToken) {
+      return;
+    }
+    try {
+      const response = await fetch(`${trimRight(relayUrl, "/")}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${deviceToken}`
+        }
+      });
+      if (!response.ok) {
+        addEvent({ kind: "error", title: `${title} failed: ${response.status}` });
+        return;
+      }
+      addEvent({ kind: "success", title });
+      await loadAdminSessions();
+      refreshHosts();
+    } catch {
+      addEvent({ kind: "error", title: `${title} failed` });
+    }
+  }, [addEvent, deviceToken, loadAdminSessions, refreshHosts, relayUrl]);
+
+  const openManage = useCallback(() => {
+    setActiveView("manage");
+    void loadAdminSessions();
+  }, [loadAdminSessions]);
+
   const projectName = workspaceName(activeHost?.status?.cwd);
   const orderedEvents = [...events].reverse();
   const hasSessionContent = orderedEvents.length > 0 || pendingRequests.length > 0;
@@ -628,19 +694,25 @@ export function App() {
             </div>
 
             <nav className="sidebar-nav" aria-label="Session tools">
-              <button onClick={startNewTask}>
+              <button
+                className={activeView === "session" ? "active" : ""}
+                onClick={() => {
+                  setActiveView("session");
+                  startNewTask();
+                }}
+              >
                 <Plus size={16} />
                 New session
               </button>
-              <button type="button">
-                <PlugZap size={16} />
-                Routines
-              </button>
-              <button type="button">
+              <button className={activeView === "manage" ? "active" : ""} onClick={openManage}>
                 <Settings size={16} />
-                Customize
+                Manage
               </button>
-              <button type="button">
+              <button onClick={refreshHosts}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+              <button type="button" onClick={openManage}>
                 <MoreHorizontal size={16} />
                 More
               </button>
@@ -684,17 +756,30 @@ export function App() {
 
           <section className="session-pane">
             <header className="session-header">
-              <button className="workspace-crumb" type="button">
-                <span>{activeHost?.name ?? "Host"}</span>
-                <span>/</span>
-                <strong>{projectName}</strong>
-                <ChevronDown size={15} />
-              </button>
+              {activeView === "manage" ? (
+                <button className="workspace-crumb" type="button">
+                  <span>Control</span>
+                  <span>/</span>
+                  <strong>Manage</strong>
+                  <ChevronDown size={15} />
+                </button>
+              ) : (
+                <button className="workspace-crumb" type="button">
+                  <span>{activeHost?.name ?? "Host"}</span>
+                  <span>/</span>
+                  <strong>{projectName}</strong>
+                  <ChevronDown size={15} />
+                </button>
+              )}
               <div className="session-actions">
                 <span className={`online-state ${activeHost?.online && socketState === "open" ? "online" : ""}`}>
                   {activeHost?.online && socketState === "open" ? "online" : socketState}
                 </span>
-                <button onClick={refreshHosts} aria-label="Refresh hosts" title="Refresh hosts">
+                <button
+                  onClick={activeView === "manage" ? loadAdminSessions : refreshHosts}
+                  aria-label="Refresh"
+                  title="Refresh"
+                >
                   <RefreshCw size={17} />
                 </button>
                 {import.meta.env.VITE_VAPID_PUBLIC_KEY ? (
@@ -706,66 +791,84 @@ export function App() {
             </header>
 
             <div className="session-body">
-              <div className="conversation">
-                {!hasSessionContent ? (
-                  <div className="empty-session">
-                    <TerminalSquare size={22} />
-                    <h1>{projectName}</h1>
-                    <p>Codex에게 작업을 보내면 이곳에 진행 상황과 승인 요청이 쌓입니다.</p>
-                  </div>
-                ) : null}
+              {activeView === "manage" ? (
+                <ManagementView
+                  sessions={adminSessions}
+                  state={adminState}
+                  message={adminMessage}
+                  currentDeviceId={deviceId}
+                  onRefresh={loadAdminSessions}
+                  onSelectHost={(hostId) => {
+                    setActiveHostId(hostId);
+                    localStorage.setItem(activeHostIdKey, hostId);
+                    setActiveView("session");
+                  }}
+                  onShutdownHost={(hostId) => runAdminAction(`/api/admin/hosts/${encodeURIComponent(hostId)}/shutdown`, "Host shutdown requested")}
+                  onForgetHost={(hostId) => runAdminAction(`/api/admin/hosts/${encodeURIComponent(hostId)}/forget`, "Host forgotten")}
+                  onRevokeDevice={(targetDeviceId) => runAdminAction(`/api/admin/devices/${encodeURIComponent(targetDeviceId)}/revoke`, "Device revoked")}
+                />
+              ) : (
+                <div className="conversation">
+                  {!hasSessionContent ? (
+                    <div className="empty-session">
+                      <TerminalSquare size={22} />
+                      <h1>{projectName}</h1>
+                      <p>Codex에게 작업을 보내면 이곳에 진행 상황과 승인 요청이 쌓입니다.</p>
+                    </div>
+                  ) : null}
 
-                {orderedEvents.map((event) => {
-                  const userText = readUserPrompt(event.detail);
-                  const isUser = event.title === "Turn started" && userText;
+                  {orderedEvents.map((event) => {
+                    const userText = readUserPrompt(event.detail);
+                    const isUser = event.title === "Turn started" && userText;
 
-                  return (
-                    <article className={`message-row ${isUser ? "user" : "assistant"} ${event.kind}`} key={event.id}>
-                      <div className="message-meta">
-                        <span>{isUser ? "You" : event.kind === "warning" ? "Approval" : "Codex"}</span>
-                        <time>{event.at}</time>
+                    return (
+                      <article className={`message-row ${isUser ? "user" : "assistant"} ${event.kind}`} key={event.id}>
+                        <div className="message-meta">
+                          <span>{isUser ? "You" : event.kind === "warning" ? "Approval" : "Codex"}</span>
+                          <time>{event.at}</time>
+                        </div>
+                        <div className="message-bubble">
+                          {isUser ? (
+                            <p>{userText}</p>
+                          ) : (
+                            <>
+                              <strong>{event.title}</strong>
+                              {event.detail ? <pre>{formatJson(event.detail)}</pre> : null}
+                            </>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+
+                  {pendingRequests.map((request) => (
+                    <article className="approval-card" key={String(request.id)}>
+                      <div>
+                        <ShieldCheck size={18} />
+                        <strong>{readableMethod(request.method)}</strong>
                       </div>
-                      <div className="message-bubble">
-                        {isUser ? (
-                          <p>{userText}</p>
-                        ) : (
-                          <>
-                            <strong>{event.title}</strong>
-                            {event.detail ? <pre>{formatJson(event.detail)}</pre> : null}
-                          </>
-                        )}
+                      <pre>{formatJson(request.params)}</pre>
+                      <div className="approval-actions">
+                        <button onClick={() => approveRequest(request, "accept")}>
+                          <Check size={15} />
+                          Accept
+                        </button>
+                        <button onClick={() => approveRequest(request, "acceptForSession")}>
+                          <ShieldCheck size={15} />
+                          Session
+                        </button>
+                        <button onClick={() => approveRequest(request, "decline")}>
+                          <X size={15} />
+                          Decline
+                        </button>
                       </div>
                     </article>
-                  );
-                })}
-
-                {pendingRequests.map((request) => (
-                  <article className="approval-card" key={String(request.id)}>
-                    <div>
-                      <ShieldCheck size={18} />
-                      <strong>{readableMethod(request.method)}</strong>
-                    </div>
-                    <pre>{formatJson(request.params)}</pre>
-                    <div className="approval-actions">
-                      <button onClick={() => approveRequest(request, "accept")}>
-                        <Check size={15} />
-                        Accept
-                      </button>
-                      <button onClick={() => approveRequest(request, "acceptForSession")}>
-                        <ShieldCheck size={15} />
-                        Session
-                      </button>
-                      <button onClick={() => approveRequest(request, "decline")}>
-                        <X size={15} />
-                        Decline
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <footer className="composer-dock">
+            {activeView === "session" ? <footer className="composer-dock">
               <div className="composer-box">
                 <textarea
                   value={prompt}
@@ -796,7 +899,7 @@ export function App() {
                 </div>
                 <span>{activeHost?.online ? "Codex · ready" : "Codex · offline"}</span>
               </div>
-            </footer>
+            </footer> : null}
           </section>
         </section>
       )}
@@ -809,6 +912,159 @@ export function App() {
       return [host, ...rest].sort((a, b) => Number(b.online) - Number(a.online));
     });
   }
+}
+
+function ManagementView({
+  sessions,
+  state,
+  message,
+  currentDeviceId,
+  onRefresh,
+  onSelectHost,
+  onShutdownHost,
+  onForgetHost,
+  onRevokeDevice
+}: {
+  sessions?: AdminSessionsResponse;
+  state: "idle" | "loading" | "failed";
+  message: string;
+  currentDeviceId: string;
+  onRefresh: () => void;
+  onSelectHost: (hostId: string) => void;
+  onShutdownHost: (hostId: string) => void;
+  onForgetHost: (hostId: string) => void;
+  onRevokeDevice: (deviceId: string) => void;
+}) {
+  const hosts = sessions?.hosts ?? [];
+  const devices = sessions?.devices ?? [];
+
+  return (
+    <section className="management-page">
+      <div className="management-title">
+        <div>
+          <h1>Manage Sessions</h1>
+          <p>로그인된 기기와 relay에 붙은 Codex host를 관리합니다.</p>
+        </div>
+        <button onClick={onRefresh}>
+          <RefreshCw size={16} />
+          {state === "loading" ? "Refreshing" : "Refresh"}
+        </button>
+      </div>
+
+      {state === "failed" ? <p className="management-error">{message}</p> : null}
+
+      <div className="stats-grid">
+        <article>
+          <strong>{hosts.filter((host) => host.online).length}</strong>
+          <span>online hosts</span>
+        </article>
+        <article>
+          <strong>{devices.length}</strong>
+          <span>devices</span>
+        </article>
+        <article>
+          <strong>{sessions?.activeMobileConnectionCount ?? 0}</strong>
+          <span>open app sessions</span>
+        </article>
+        <article>
+          <strong>{sessions?.pendingPairingCount ?? 0}</strong>
+          <span>pairing codes</span>
+        </article>
+      </div>
+
+      <section className="management-section">
+        <h2>Hosts</h2>
+        <div className="management-list">
+          {hosts.map((host) => (
+            <article className="management-card" key={host.id}>
+              <div className="management-card-head">
+                <div>
+                  <strong>{host.name}</strong>
+                  <span>{workspaceName(host.status?.cwd)}</span>
+                </div>
+                <span className={`online-state ${host.online ? "online" : ""}`}>
+                  {host.online ? "online" : "offline"}
+                </span>
+              </div>
+              <dl>
+                <div>
+                  <dt>Codex</dt>
+                  <dd>{host.status?.codexReady ? "running" : "stopped"}</dd>
+                </div>
+                <div>
+                  <dt>Active threads</dt>
+                  <dd>{host.status?.activeThreadIds.length ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Last seen</dt>
+                  <dd>{formatDateTime(host.lastSeenAt)}</dd>
+                </div>
+              </dl>
+              <p>{host.status?.message ?? "No status message"}</p>
+              <div className="management-actions">
+                <button onClick={() => onSelectHost(host.id)}>
+                  <TerminalSquare size={15} />
+                  Open
+                </button>
+                <button onClick={() => onShutdownHost(host.id)} disabled={!host.online}>
+                  <CircleStop size={15} />
+                  Shutdown
+                </button>
+                <button onClick={() => onForgetHost(host.id)} disabled={host.online}>
+                  <Trash2 size={15} />
+                  Forget
+                </button>
+              </div>
+            </article>
+          ))}
+          {hosts.length === 0 ? <p className="muted">No hosts connected</p> : null}
+        </div>
+      </section>
+
+      <section className="management-section">
+        <h2>Devices</h2>
+        <div className="management-list">
+          {devices.map((device) => (
+            <article className="management-card" key={device.id}>
+              <div className="management-card-head">
+                <div>
+                  <strong>{device.name}</strong>
+                  <span>{shortId(device.id)}{device.id === currentDeviceId || device.current ? " · current" : ""}</span>
+                </div>
+                <span className={`online-state ${device.activeConnectionCount > 0 ? "online" : ""}`}>
+                  {device.activeConnectionCount > 0 ? "open" : "idle"}
+                </span>
+              </div>
+              <dl>
+                <div>
+                  <dt>Scope</dt>
+                  <dd>{device.allHosts ? "all hosts" : `${device.hostIds.length} host`}</dd>
+                </div>
+                <div>
+                  <dt>Opened</dt>
+                  <dd>{device.activeConnectionCount}</dd>
+                </div>
+                <div>
+                  <dt>Last seen</dt>
+                  <dd>{formatDateTime(device.lastSeenAt)}</dd>
+                </div>
+              </dl>
+              <div className="management-actions">
+                <button
+                  onClick={() => onRevokeDevice(device.id)}
+                  disabled={device.current || device.id === currentDeviceId}
+                >
+                  <PlugZap size={15} />
+                  Revoke
+                </button>
+              </div>
+            </article>
+          ))}
+          {devices.length === 0 ? <p className="muted">No logged-in devices</p> : null}
+        </div>
+      </section>
+    </section>
+  );
 }
 
 function HelpPage({ relayUrl, mobileUrl }: { relayUrl: string; mobileUrl: string }) {
@@ -904,6 +1160,14 @@ function workspaceName(cwd?: string): string {
 
 function shortId(value: string): string {
   return value ? value.replace(/^dev_/, "").slice(0, 8) : "device";
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
 }
 
 function readUserPrompt(value: unknown): string | undefined {

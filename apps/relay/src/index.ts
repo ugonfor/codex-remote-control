@@ -7,6 +7,8 @@ import type {
   HostRuntimeStatus,
   HostSummary,
   HostToRelayMessage,
+  AdminActionResponse,
+  AdminSessionsResponse,
   AuthLoginRequest,
   AuthLoginResponse,
   MobileToRelayMessage,
@@ -153,6 +155,74 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
       deleteDevice(device);
     }
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/sessions") {
+    const device = authenticateAdminDevice(req);
+    if (!device) {
+      sendJson(res, 403, { error: "admin_required" });
+      return;
+    }
+    sendJson(res, 200, toAdminSessionsResponse(device));
+    return;
+  }
+
+  const adminHostShutdownMatch = /^\/api\/admin\/hosts\/([^/]+)\/shutdown$/.exec(url.pathname);
+  if (req.method === "POST" && adminHostShutdownMatch) {
+    const device = authenticateAdminDevice(req);
+    if (!device) {
+      sendJson(res, 403, { error: "admin_required" });
+      return;
+    }
+    const host = hosts.get(decodeURIComponent(adminHostShutdownMatch[1]));
+    if (!host || !host.socket || host.socket.readyState !== WebSocket.OPEN) {
+      sendJson(res, 404, { error: "host_offline" });
+      return;
+    }
+    sendHost(host.socket, {
+      type: "host.shutdown",
+      reason: `Requested by ${device.name}`
+    });
+    sendJson(res, 200, { ok: true } satisfies AdminActionResponse);
+    return;
+  }
+
+  const adminHostForgetMatch = /^\/api\/admin\/hosts\/([^/]+)\/forget$/.exec(url.pathname);
+  if (req.method === "POST" && adminHostForgetMatch) {
+    const device = authenticateAdminDevice(req);
+    if (!device) {
+      sendJson(res, 403, { error: "admin_required" });
+      return;
+    }
+    const host = hosts.get(decodeURIComponent(adminHostForgetMatch[1]));
+    if (!host) {
+      sendJson(res, 404, { error: "host_not_found" });
+      return;
+    }
+    if (host.online) {
+      sendJson(res, 409, { error: "host_online" });
+      return;
+    }
+    deleteHost(host);
+    sendJson(res, 200, { ok: true } satisfies AdminActionResponse);
+    return;
+  }
+
+  const adminDeviceRevokeMatch = /^\/api\/admin\/devices\/([^/]+)\/revoke$/.exec(url.pathname);
+  if (req.method === "POST" && adminDeviceRevokeMatch) {
+    const adminDevice = authenticateAdminDevice(req);
+    if (!adminDevice) {
+      sendJson(res, 403, { error: "admin_required" });
+      return;
+    }
+    const device = devices.get(decodeURIComponent(adminDeviceRevokeMatch[1]));
+    if (!device) {
+      sendJson(res, 404, { error: "device_not_found" });
+      return;
+    }
+    deleteDevice(device);
+    sendJson(res, 200, { ok: true } satisfies AdminActionResponse);
     return;
   }
 
@@ -559,6 +629,35 @@ function toHostSummary(host: HostRecord): HostSummary {
   };
 }
 
+function toAdminSessionsResponse(currentDevice: DeviceRecord): AdminSessionsResponse {
+  const activeConnectionCounts = new Map<string, number>();
+  for (const connection of mobileConnections.values()) {
+    activeConnectionCounts.set(
+      connection.device.id,
+      (activeConnectionCounts.get(connection.device.id) ?? 0) + 1
+    );
+  }
+
+  return {
+    hosts: Array.from(hosts.values()).map(toHostSummary),
+    devices: Array.from(devices.values()).map((device) => ({
+      id: device.id,
+      name: device.name,
+      allHosts: device.allHosts,
+      hostIds: Array.from(device.hostIds),
+      createdAt: device.createdAt.toISOString(),
+      lastSeenAt: device.lastSeenAt.toISOString(),
+      activeConnectionCount: activeConnectionCounts.get(device.id) ?? 0,
+      current: device.id === currentDevice.id
+    })),
+    activeMobileConnectionCount: mobileConnections.size,
+    pendingMobileRequestCount: pendingMobileRequests.size,
+    pendingPairingCount: Array.from(pairings.values())
+      .filter((pairing) => pairing.expiresAt.getTime() >= Date.now())
+      .length
+  };
+}
+
 function createDevice(name: string, options: { hostIds?: string[]; allHosts: boolean }): DeviceRecord {
   const device: DeviceRecord = {
     id: `dev_${randomToken(12)}`,
@@ -589,10 +688,34 @@ function deleteDevice(device: DeviceRecord): void {
   }
 }
 
+function deleteHost(host: HostRecord): void {
+  if (host.socket && host.socket.readyState === WebSocket.OPEN) {
+    host.socket.close(1008, "forgotten");
+  }
+  hosts.delete(host.id);
+  hostTokens.delete(host.token);
+  for (const pairing of pairings.values()) {
+    if (pairing.hostId === host.id) {
+      pairings.delete(pairing.code);
+    }
+  }
+  for (const device of devices.values()) {
+    device.hostIds.delete(host.id);
+  }
+  for (const connection of mobileConnections.values()) {
+    connection.subscribedHostIds.delete(host.id);
+  }
+}
+
 function authenticateDevice(req: IncomingMessage): DeviceRecord | undefined {
   const token = getToken(req);
   const deviceId = token ? deviceTokens.get(token) : undefined;
   return deviceId ? devices.get(deviceId) : undefined;
+}
+
+function authenticateAdminDevice(req: IncomingMessage): DeviceRecord | undefined {
+  const device = authenticateDevice(req);
+  return device?.allHosts ? device : undefined;
 }
 
 function authenticateHost(req: IncomingMessage): HostRecord | undefined {

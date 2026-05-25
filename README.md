@@ -174,6 +174,20 @@ URL을 출력합니다.
 
 pairing URL로 열면 기존 pairing fallback을 사용합니다.
 
+## 관리 화면
+
+로그인 후 왼쪽 상단의 Manage를 누르면 relay에 떠 있는 session들을 관리할 수 있습니다.
+
+- Hosts: relay에 붙은 Codex host 목록입니다.
+- Open: 해당 host를 현재 작업 화면으로 엽니다.
+- Shutdown: online host agent에 종료 요청을 보냅니다.
+- Forget: offline host 기록을 relay에서 제거합니다.
+- Devices: 로그인된 폰/브라우저 기기 목록입니다.
+- Revoke: 다른 기기의 device token을 폐기하고 연결을 끊습니다.
+
+Manage 화면은 password login으로 들어온 device에서만 사용할 수 있습니다. pairing fallback으로
+연결한 device는 자기 host만 조종할 수 있고 전체 relay 관리는 할 수 없습니다.
+
 프로젝트 경로는 host agent를 시작할 때 `--cwd`로 정합니다. 모델과 Codex 설정은 Codex
 CLI 설정을 따릅니다. 모바일 UI에서 경로나 모델을 다시 고르지 않습니다.
 
@@ -294,6 +308,7 @@ npm run build
 
 - relay `/healthz`
 - password login/logout
+- admin session listing
 - pairing creation and claim
 - mobile WebSocket host listing
 - host-agent to relay connection

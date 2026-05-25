@@ -84,6 +84,29 @@ export type AuthLoginResponse = {
   hosts: HostSummary[];
 };
 
+export type AdminDeviceSummary = {
+  id: string;
+  name: string;
+  allHosts: boolean;
+  hostIds: string[];
+  createdAt: string;
+  lastSeenAt: string;
+  activeConnectionCount: number;
+  current: boolean;
+};
+
+export type AdminSessionsResponse = {
+  hosts: HostSummary[];
+  devices: AdminDeviceSummary[];
+  activeMobileConnectionCount: number;
+  pendingMobileRequestCount: number;
+  pendingPairingCount: number;
+};
+
+export type AdminActionResponse = {
+  ok: boolean;
+};
+
 export type HostToRelayMessage =
   | {
       type: "host.hello";
